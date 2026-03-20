@@ -2,12 +2,32 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import os
+import gdown
 
 st.set_page_config(page_title="Dynamic Pricing System", page_icon="📊", layout="wide")
 
+# =========================
+# Google Drive Model Setup
+# =========================
+MODEL_PATH = "Models/BestModel.pkl"
+MODEL_FILE_ID = "1pX_MEzh3FOsy_QIz55_fnh3sx2jEFGvo"  
+
+# =========================
+# Load Artifacts
+# =========================
 @st.cache_resource
 def load_artifacts():
-    model = joblib.load("Models/BestModel.pkl")
+    os.makedirs("Models", exist_ok=True)
+
+    # Download model if not present
+    if not os.path.exists(MODEL_PATH):
+        with st.spinner("Downloading model... This may take a minute ⏳"):
+            url = f"https://drive.google.com/uc?id={MODEL_FILE_ID}"
+            gdown.download(url, MODEL_PATH, quiet=False)
+
+    # Load all artifacts
+    model = joblib.load(MODEL_PATH)
     kmeans = joblib.load("Models/kmeans.pkl")
     feature_columns = joblib.load("Models/FeatureColumns.pkl")
     lat_long_map = joblib.load("Models/LatLongMap.pkl")
@@ -19,8 +39,12 @@ def load_artifacts():
     return model, kmeans, feature_columns, default_lat, default_long, lat_long_map, neighbourhood_mean_map, global_mean
 
 
+# Load once (cached)
 model, kmeans, feature_columns, default_lat, default_long, lat_long_map, neighbourhood_mean_map, global_mean = load_artifacts()
 
+# =========================
+# UI
+# =========================
 st.title("📊 Dynamic Pricing System for Short-Term Rentals")
 st.write(
     "Predict a recommended nightly price for a short-term rental listing "
@@ -59,6 +83,9 @@ with col2:
     longitude = lat_long_map["longitude"].get(neighbourhood, default_long)
 
 
+# =========================
+# Preprocessing
+# =========================
 def preprocess_input():
     df = pd.DataFrame([{
         "neighbourhood": neighbourhood,
@@ -72,31 +99,41 @@ def preprocess_input():
         "longitude": longitude
     }])
 
+    # Log transform
     df["minimum_nights"] = np.log1p(df["minimum_nights"])
     df["number_of_reviews"] = np.log1p(df["number_of_reviews"])
     df["calculated_host_listings_count"] = np.log1p(df["calculated_host_listings_count"])
 
+    # Encoding
     df["Encoded_Neighbourhood"] = df["neighbourhood"].map(neighbourhood_mean_map)
     df["Encoded_Neighbourhood"] = df["Encoded_Neighbourhood"].fillna(global_mean)
 
+    # Clustering
     df["location_cluster"] = kmeans.predict(df[["latitude", "longitude"]])
 
+    # Drop original
     df = df.drop(columns=["neighbourhood"])
 
+    # One-hot encoding
     df = pd.get_dummies(df, columns=["city", "room_type", "location_cluster"], drop_first=True)
 
+    # Align columns
     df = df.reindex(columns=feature_columns, fill_value=0)
 
     return df
 
 
+# =========================
+# Prediction
+# =========================
 if st.button("Predict Price"):
     try:
         final_input = preprocess_input()
         pred_log = model.predict(final_input)[0]
         pred_price = np.expm1(pred_log)
 
-        st.success(f"Recommended Nightly Price: ${pred_price:,.2f}")
+        st.success(f"💰 Recommended Nightly Price: ${pred_price:,.2f}")
+
         st.subheader("Input Summary")
         st.dataframe(final_input)
 
